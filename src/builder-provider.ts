@@ -53,11 +53,12 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
   }
 
   async doGenerate(options: LanguageModelV3CallOptions): Promise<LanguageModelV3GenerateResult> {
-    const { userPrompt } = this.convertMessages(options.prompt);
+    const { messages, userPrompt } = this.convertMessages(options.prompt);
     const url = this.buildUrl();
     
+    // Build CodeGenInputOptions payload
     const body: any = {
-      position: "cli",
+      position: "cli", // Default position
       sessionId: (options as any).sessionId || "session-" + Date.now(),
       userPrompt,
       codeGenMode: "quality-v4",
@@ -89,16 +90,22 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
     for (const line of lines) {
       try {
         const event = JSON.parse(line);
-        if ((event.type === "delta" || event.type === "text") && event.content) {
+        if (event.type === "delta" && event.content) {
+          fullContent += event.content;
+        } else if (event.type === "text" && event.content) {
           fullContent += event.content;
         } else if (event.type === "done") {
           stopReason = this.mapFinishReason(event.stopReason);
         }
-      } catch { /* ignore */ }
+      } catch {
+        // Skip invalid JSON
+      }
     }
 
+    const content: LanguageModelV3Content[] = [{ type: "text", text: fullContent }];
+
     return {
-      content: [{ type: "text", text: fullContent }],
+      content,
       finishReason: stopReason.unified as any,
       usage: {
         inputTokens: 0,
@@ -121,6 +128,7 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
       codeGenMode: "quality-v4",
       userContext: await this.getUserContext(),
       maxTokens: options.maxOutputTokens ?? this.settings.maxOutputTokens,
+      // Map tools if provided
       enabledTools: options.tools?.map(t => t.name),
     };
 
@@ -153,16 +161,20 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
     return `${baseURL}/codegen/completion?apiKey=${this.config.apiKey}&userId=${this.config.userId}`;
   }
 
-  private convertMessages(prompt: LanguageModelV3CallOptions["prompt"]): { userPrompt: string } {
+  private convertMessages(prompt: LanguageModelV3CallOptions["prompt"]): { messages: any[], userPrompt: string } {
     let userPrompt = "";
-    for (const msg of prompt) {
+    const messages = prompt.map((msg) => {
+      const content = Array.isArray(msg.content) 
+        ? msg.content.filter(p => p.type === "text").map(p => (p as any).text).join("")
+        : typeof msg.content === "string" ? msg.content : "";
+      
       if (msg.role === "user") {
-        userPrompt = Array.isArray(msg.content) 
-          ? msg.content.filter(p => p.type === "text").map(p => (p as any).text).join("")
-          : typeof msg.content === "string" ? msg.content : "";
+        userPrompt = content; // Last user prompt wins for Builder
       }
-    }
-    return { userPrompt };
+      return { role: msg.role, content };
+    });
+
+    return { messages, userPrompt };
   }
 
   private async getUserContext() {
@@ -178,11 +190,16 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
 
   private mapFinishReason(reason?: string): LanguageModelV3FinishReason {
     switch (reason) {
-      case "end_turn": return { unified: "stop", raw: reason };
-      case "max_tokens": return { unified: "length", raw: reason };
-      case "tool_use": return { unified: "tool-calls", raw: reason };
-      case "content_filter": return { unified: "content-filter", raw: reason };
-      default: return { unified: "other", raw: reason };
+      case "end_turn":
+        return { unified: "stop", raw: reason };
+      case "max_tokens":
+        return { unified: "length", raw: reason };
+      case "tool_use":
+        return { unified: "tool-calls", raw: reason };
+      case "content_filter":
+        return { unified: "content-filter", raw: reason };
+      default:
+        return { unified: "other", raw: reason };
     }
   }
 
@@ -196,12 +213,16 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
-          try { controller.enqueue(JSON.parse(trimmed)); } catch { /* ignore */ }
+          try {
+            controller.enqueue(JSON.parse(trimmed));
+          } catch { /* ignore */ }
         }
       },
       flush(controller) {
         if (buffer.trim()) {
-          try { controller.enqueue(JSON.parse(buffer)); } catch { /* ignore */ }
+          try {
+            controller.enqueue(JSON.parse(buffer));
+          } catch { /* ignore */ }
         }
       },
     });
@@ -235,16 +256,23 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
             }
             break;
           case "tool":
+            // Map Builder tool to AI SDK tool-call
             controller.enqueue({
               type: "tool-call",
               toolCallId: chunk.id || "tool-" + Date.now(),
               toolName: chunk.name,
-              input: chunk.content ? JSON.parse(chunk.content) : {},
-            });
+              args: chunk.content ? JSON.parse(chunk.content) : {},
+            } as any);
             break;
           case "error":
             if (chunk.code === "ask-to-continue") {
-              controller.error(new Error(`BUILDER_ASK_TO_CONTINUE: ${chunk.message}`));
+              // Custom handling for ask-to-continue
+              // For now, we emit as a specific error or message
+              controller.enqueue({
+                type: "text-delta",
+                id: chunk.id || "0",
+                delta: `\n[Wait: ${chunk.message}]\n`,
+              });
             }
             break;
           case "done":
@@ -297,6 +325,8 @@ export function createBuilder(options: BuilderProviderSettings): BuilderProvider
   const provider = function (modelId: string, settings?: BuilderChatSettings) {
     return createModel(modelId, settings);
   };
+
   provider.languageModel = createModel;
+
   return provider as BuilderProvider;
 }
