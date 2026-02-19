@@ -1,6 +1,6 @@
 {
   "name": "ai-sdk-provider-builder",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Builder.io AI SDK provider for language models",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
