@@ -1,0 +1,33 @@
+{
+  "name": "@kobosh/ai-sdk-provider-builder",
+  "version": "0.1.0",
+  "description": "Builder.io AI SDK provider for language models",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch"
+  },
+  "dependencies": {
+    "@ai-sdk/provider": "^3.0.0",
+    "@ai-sdk/provider-utils": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "tsup": "^8.0.2",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "ai": ">=4.0.0"
+  }
+}
