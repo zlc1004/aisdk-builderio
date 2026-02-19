@@ -41,10 +41,16 @@ interface BuilderSSEEvent {
   delta?: string;
   id?: string;
   stopReason?: string;
-  actions?: Array<{ type: string; content: string }>;
+  actions?: Array<{ type: string; content: string; id?: string }>;
   messageIndex?: number;
   creditsUsed?: number;
   model?: string;
+  user?: {
+    source?: string;
+    role?: string;
+    userId?: string;
+  };
+  synthetic?: boolean;
 }
 
 export class BuilderChatLanguageModel implements LanguageModelV3 {
@@ -249,38 +255,67 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
   }
 
   private createStreamTransformer(): TransformStream<BuilderSSEEvent, LanguageModelV3StreamPart> {
-    let isFirst = true;
     let accumulatedText = "";
+    let accumulatedReasoning = "";
+    let hasStartedText = false;
     let finishReason: LanguageModelV3FinishReason = { unified: "other", raw: undefined };
 
     return new TransformStream({
       transform(chunk, controller) {
-        if (isFirst) {
-          controller.enqueue({ type: "text-start", id: "0" });
-          isFirst = false;
+        // Emit text-start on first text delta
+        if (!hasStartedText && (chunk.type === "delta" || chunk.type === "thinking" || chunk.type === "user")) {
+          controller.enqueue({ type: "text-start", id: chunk.id || "0" });
+          hasStartedText = true;
         }
 
-        if (chunk.type === "delta" && chunk.delta) {
-          accumulatedText += chunk.delta;
-          controller.enqueue({ type: "text-delta", id: chunk.id || "0", delta: chunk.delta });
-        }
+        switch (chunk.type) {
+          case "user":
+            break;
 
-        if (chunk.type === "done") {
-          finishReason = chunk.stopReason === "end_turn" 
-            ? { unified: "stop", raw: chunk.stopReason }
-            : chunk.stopReason === "max_tokens"
-              ? { unified: "length", raw: chunk.stopReason }
-              : { unified: "other", raw: chunk.stopReason };
+          case "thinking":
+            if (chunk.content) {
+              accumulatedReasoning += chunk.content;
+              controller.enqueue({
+                type: "reasoning-delta",
+                id: chunk.id || "0",
+                delta: chunk.content,
+              });
+            }
+            break;
+
+          case "delta":
+            if (chunk.content) {
+              accumulatedText += chunk.content;
+              controller.enqueue({ type: "text-delta", id: chunk.id || "0", delta: chunk.content });
+            }
+            break;
+
+          case "done":
+            finishReason = chunk.stopReason === "end_turn" 
+              ? { unified: "stop", raw: chunk.stopReason }
+              : chunk.stopReason === "max_tokens"
+                ? { unified: "length", raw: chunk.stopReason }
+                : { unified: "other", raw: chunk.stopReason };
+
+            if (chunk.actions?.[0]?.content) {
+              accumulatedText = chunk.actions[0].content;
+            }
+            break;
         }
       },
 
       flush(controller) {
+        // Emit text-end if we had text
+        if (hasStartedText || accumulatedText) {
+          controller.enqueue({ type: "text-end", id: "0" });
+        }
+
         controller.enqueue({
           type: "finish",
           finishReason,
           usage: {
             inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
-            outputTokens: { total: accumulatedText.length, text: accumulatedText.length, reasoning: undefined },
+            outputTokens: { total: accumulatedText.length, text: accumulatedText.length, reasoning: accumulatedReasoning.length || undefined },
           },
         });
       },
