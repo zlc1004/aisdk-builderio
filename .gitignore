@@ -9,3 +9,4 @@ package.json
 .ruff_cache
 cli
 custom provider.md
+dist
