@@ -1,5 +1,5 @@
 {
-  "name": "@kobosh/ai-sdk-provider-builder",
+  "name": "@koboshcom/ai-sdk-provider-builder",
   "version": "0.1.0",
   "description": "Builder.io AI SDK provider for language models",
   "main": "./dist/index.js",
