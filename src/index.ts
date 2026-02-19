@@ -101,9 +101,9 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
       content: [{ type: "text", text: fullContent }],
       finishReason: stopReason.unified as any,
       usage: {
-        inputTokens: 0,
-        outputTokens: fullContent.length,
-      } as any,
+        inputTokens: { total: 0, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: fullContent.length, text: fullContent.length, reasoning: undefined },
+      },
       request: { body },
       response: { body: text },
       warnings: [],
@@ -209,29 +209,35 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
 
   private createStreamTransformer(): TransformStream<any, LanguageModelV3StreamPart> {
     let hasStartedText = false;
+    let hasStartedReasoning = false;
     let accumulatedText = "";
     let accumulatedReasoning = "";
     const self = this;
 
     return new TransformStream({
       transform(chunk, controller) {
-        if (!hasStartedText && (chunk.type === "delta" || chunk.type === "thinking" || chunk.type === "text")) {
-          controller.enqueue({ type: "text-start", id: chunk.id || "0" });
-          hasStartedText = true;
-        }
+        const id = chunk.id || "0";
 
         switch (chunk.type) {
           case "thinking":
             if (chunk.content) {
+              if (!hasStartedReasoning) {
+                controller.enqueue({ type: "reasoning-start", id });
+                hasStartedReasoning = true;
+              }
               accumulatedReasoning += chunk.content;
-              controller.enqueue({ type: "reasoning-delta", id: chunk.id || "0", delta: chunk.content });
+              controller.enqueue({ type: "reasoning-delta", id, delta: chunk.content });
             }
             break;
           case "delta":
           case "text":
             if (chunk.content) {
+              if (!hasStartedText) {
+                controller.enqueue({ type: "text-start", id });
+                hasStartedText = true;
+              }
               accumulatedText += chunk.content;
-              controller.enqueue({ type: "text-delta", id: chunk.id || "0", delta: chunk.content });
+              controller.enqueue({ type: "text-delta", id, delta: chunk.content });
             }
             break;
           case "tool":
@@ -248,21 +254,25 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
             }
             break;
           case "done":
+            if (hasStartedReasoning) {
+              controller.enqueue({ type: "reasoning-end", id });
+            }
+            if (hasStartedText) {
+              controller.enqueue({ type: "text-end", id });
+            }
             controller.enqueue({
               type: "finish",
               finishReason: self.mapFinishReason(chunk.stopReason).unified as any,
               usage: {
-                inputTokens: 0,
-                outputTokens: accumulatedText.length,
-              } as any,
+                inputTokens: { total: 0, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: accumulatedText.length, text: accumulatedText.length, reasoning: accumulatedReasoning.length || undefined },
+              },
             });
             break;
         }
       },
       flush(controller) {
-        if (hasStartedText) {
-          controller.enqueue({ type: "text-end", id: "0" });
-        }
+        // No additional parts needed in flush as they are handled in 'done' chunk
       }
     });
   }
