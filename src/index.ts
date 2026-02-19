@@ -53,13 +53,14 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
   }
 
   async doGenerate(options: LanguageModelV3CallOptions): Promise<LanguageModelV3GenerateResult> {
-    const { userPrompt } = this.convertMessages(options.prompt);
+    const { userPrompt, toolResults } = this.convertMessages(options.prompt);
     const url = this.buildUrl();
     
     const body: any = {
       position: "cli",
       sessionId: (options as any).sessionId || "session-" + Date.now(),
       userPrompt,
+      toolResults,
       codeGenMode: "quality-v4",
       userContext: await this.getUserContext(),
       maxTokens: options.maxOutputTokens ?? this.settings.maxOutputTokens,
@@ -111,13 +112,14 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
   }
 
   async doStream(options: LanguageModelV3CallOptions): Promise<LanguageModelV3StreamResult> {
-    const { userPrompt } = this.convertMessages(options.prompt);
+    const { userPrompt, toolResults } = this.convertMessages(options.prompt);
     const url = this.buildUrl();
 
     const body: any = {
       position: "cli",
       sessionId: (options as any).sessionId || "session-" + Date.now(),
       userPrompt,
+      toolResults,
       codeGenMode: "quality-v4",
       userContext: await this.getUserContext(),
       maxTokens: options.maxOutputTokens ?? this.settings.maxOutputTokens,
@@ -153,16 +155,31 @@ export class BuilderChatLanguageModel implements LanguageModelV3 {
     return `${baseURL}/codegen/completion?apiKey=${this.config.apiKey}&userId=${this.config.userId}`;
   }
 
-  private convertMessages(prompt: LanguageModelV3CallOptions["prompt"]): { userPrompt: string } {
+  private convertMessages(prompt: LanguageModelV3CallOptions["prompt"]): { userPrompt: string, toolResults: any[] } {
     let userPrompt = "";
+    const toolResults: any[] = [];
+
     for (const msg of prompt) {
       if (msg.role === "user") {
         userPrompt = Array.isArray(msg.content) 
           ? msg.content.filter(p => p.type === "text").map(p => (p as any).text).join("")
           : typeof msg.content === "string" ? msg.content : "";
+      } else if (msg.role === "tool") {
+        for (const part of msg.content) {
+          if (part.type === "tool-result") {
+            const toolResultPart = part as any;
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: toolResultPart.toolCallId,
+              tool_name: toolResultPart.toolName,
+              content: typeof toolResultPart.result === 'string' ? toolResultPart.result : JSON.stringify(toolResultPart.result),
+              is_error: toolResultPart.isError,
+            });
+          }
+        }
       }
     }
-    return { userPrompt };
+    return { userPrompt, toolResults };
   }
 
   private async getUserContext() {
