@@ -7,3 +7,5 @@ package.json
 .vscode
 .conda
 .ruff_cache
+cli
+custom provider.md
